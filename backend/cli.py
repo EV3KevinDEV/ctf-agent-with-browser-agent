@@ -11,6 +11,7 @@ import click
 from rich.console import Console
 
 from backend.config import Settings
+from backend.model_selection import select_models_for_challenge
 from backend.models import DEFAULT_MODELS
 
 console = Console()
@@ -97,10 +98,6 @@ async def _run_single(
     from backend.prompts import ChallengeMeta
     from backend.sandbox import cleanup_orphan_containers, configure_semaphore
 
-    max_containers = max_challenges * len(model_specs)
-    configure_semaphore(max_containers)
-    await cleanup_orphan_containers()
-
     challenge_path = Path(challenge_dir)
     meta_path = challenge_path / "metadata.yml"
     if not meta_path.exists():
@@ -108,7 +105,15 @@ async def _run_single(
         sys.exit(1)
 
     meta = ChallengeMeta.from_yaml(meta_path)
+    selected_models = select_models_for_challenge(model_specs, meta, settings)
+
+    max_containers = max_challenges * len(selected_models)
+    configure_semaphore(max_containers)
+    await cleanup_orphan_containers()
+
     console.print(f"[bold]Challenge:[/bold] {meta.name} ({meta.category}, {meta.value} pts)")
+    if selected_models != model_specs:
+        console.print(f"[dim]Auto-enabled models for this challenge: {', '.join(selected_models)}[/dim]")
 
     ctfd = CTFdClient(
         base_url=settings.ctfd_url,
@@ -124,7 +129,7 @@ async def _run_single(
         ctfd=ctfd,
         cost_tracker=cost_tracker,
         settings=settings,
-        model_specs=model_specs,
+        model_specs=selected_models,
         no_submit=no_submit,
     )
 
@@ -157,7 +162,9 @@ async def _run_coordinator(
     """Run the full coordinator (continuous until Ctrl+C)."""
     from backend.sandbox import cleanup_orphan_containers, configure_semaphore
 
-    max_containers = max_challenges * len(model_specs)
+    # Per-challenge auto-enable may add browser-use on top of base model_specs.
+    extra = 1 if getattr(settings, "browser_use_auto_enable", True) else 0
+    max_containers = max_challenges * (len(model_specs) + extra)
     configure_semaphore(max_containers)
     await cleanup_orphan_containers()
     console.print(f"[bold]Starting coordinator ({coordinator_backend}, Ctrl+C to stop)...[/bold]\n")

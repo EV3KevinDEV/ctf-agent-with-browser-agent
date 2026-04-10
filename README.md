@@ -110,6 +110,19 @@ uv run ctf-solve \
 
 This solver is **not** part of `DEFAULT_MODELS`. It runs Chrome/Chromium on the host, uses Browser Use `0.12.6` with `ChatBrowserUse`, and keeps the existing Docker sandbox for shell commands, local files, and exploit scripts.
 
+### Auto-Enable Browser Solver (Per Challenge)
+
+When running `ctf-solve`, the coordinator now auto-adds `browser-use/bu-latest` **per challenge** when it detects browser-heavy signals (for example web category or HTTP/HTTPS connection info), but only if Browser Use prerequisites are available:
+
+- `BROWSER_USE_API_KEY` is set
+- host Chrome/Chromium exists (or `BROWSER_USE_EXECUTABLE_PATH` is set)
+
+You can disable this behavior with:
+
+```env
+BROWSER_USE_AUTO_ENABLE=false
+```
+
 ## Sandbox Tooling
 
 Each solver gets an isolated Docker container pre-loaded with CTF tools:
@@ -150,6 +163,7 @@ GEMINI_API_KEY=...
 BROWSER_USE_API_KEY=
 BROWSER_USE_EXECUTABLE_PATH=
 BROWSER_USE_HEADLESS=true
+BROWSER_USE_AUTO_ENABLE=true
 ```
 
 All settings can also be passed as environment variables or CLI flags.

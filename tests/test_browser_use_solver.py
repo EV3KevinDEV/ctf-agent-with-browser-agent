@@ -10,6 +10,7 @@ from backend.agents.solver import Solver
 from backend.agents.swarm import ChallengeSwarm
 from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
+from backend.model_selection import BROWSER_USE_MODEL_SPEC
 from backend.prompts import ChallengeMeta
 from backend.solver_base import FLAG_FOUND
 
@@ -45,7 +46,7 @@ def test_swarm_routes_browser_use_solver() -> None:
         settings=_settings(),
     )
 
-    browser_solver = swarm._create_solver("browser-use/bu-latest")
+    browser_solver = swarm._create_solver(BROWSER_USE_MODEL_SPEC)
     default_solver = swarm._create_solver("azure/gpt-5.4")
 
     assert isinstance(browser_solver, BrowserUseSolver)

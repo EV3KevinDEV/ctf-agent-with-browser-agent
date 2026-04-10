@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     browser_use_api_key: str = ""
+    browser_use_auto_enable: bool = True
 
     # Provider-specific (optional, for Bedrock/Azure/Zen fallback)
     aws_region: str = "us-east-1"

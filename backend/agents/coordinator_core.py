@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from backend.deps import CoordinatorDeps
+from backend.model_selection import select_models_for_challenge
 from backend.prompts import ChallengeMeta
 from backend.solver_base import FLAG_FOUND
 
@@ -68,13 +69,16 @@ async def do_spawn_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
 
     from backend.agents.swarm import ChallengeSwarm
 
+    challenge_meta = deps.challenge_metas[challenge_name]
+    model_specs = select_models_for_challenge(deps.model_specs, challenge_meta, deps.settings)
+
     swarm = ChallengeSwarm(
         challenge_dir=deps.challenge_dirs[challenge_name],
-        meta=deps.challenge_metas[challenge_name],
+        meta=challenge_meta,
         ctfd=deps.ctfd,
         cost_tracker=deps.cost_tracker,
         settings=deps.settings,
-        model_specs=deps.model_specs,
+        model_specs=model_specs,
         no_submit=deps.no_submit,
         coordinator_inbox=deps.coordinator_inbox,
     )
@@ -91,7 +95,7 @@ async def do_spawn_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
 
     task = asyncio.create_task(_run_and_cleanup(), name=f"swarm-{challenge_name}")
     deps.swarm_tasks[challenge_name] = task
-    return f"Swarm spawned for {challenge_name} with {len(deps.model_specs)} models"
+    return f"Swarm spawned for {challenge_name} with {len(model_specs)} models"
 
 
 async def do_check_swarm_status(deps: CoordinatorDeps, challenge_name: str) -> str:
