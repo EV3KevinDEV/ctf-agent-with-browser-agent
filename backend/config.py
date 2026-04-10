@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     gemini_api_key: str = ""
+    browser_use_api_key: str = ""
 
     # Provider-specific (optional, for Bedrock/Azure/Zen fallback)
     aws_region: str = "us-east-1"
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     opencode_zen_api_key: str = ""
+    browser_use_executable_path: str = ""
+    browser_use_headless: bool = True
 
     # Infra
     sandbox_image: str = "ctf-sandbox"

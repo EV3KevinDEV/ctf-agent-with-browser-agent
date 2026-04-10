@@ -98,6 +98,18 @@ Default model lineup (configurable in `backend/models.py`):
 | GPT-5.4-mini | Codex | Fast, good for easy challenges |
 | GPT-5.3-codex | Codex | Reasoning model (xhigh effort) |
 
+### Opt-In Browser Solver
+
+For browser-heavy web challenges, you can add a Browser Use solver explicitly:
+
+```bash
+uv run ctf-solve \
+  --models browser-use/bu-latest \
+  --challenge challenges/example-web
+```
+
+This solver is **not** part of `DEFAULT_MODELS`. It runs Chrome/Chromium on the host, uses Browser Use `0.12.6` with `ChatBrowserUse`, and keeps the existing Docker sandbox for shell commands, local files, and exploit scripts.
+
 ## Sandbox Tooling
 
 Each solver gets an isolated Docker container pre-loaded with CTF tools:
@@ -135,6 +147,9 @@ CTFD_TOKEN=ctfd_your_token
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...
+BROWSER_USE_API_KEY=
+BROWSER_USE_EXECUTABLE_PATH=
+BROWSER_USE_HEADLESS=true
 ```
 
 All settings can also be passed as environment variables or CLI flags.
@@ -143,7 +158,9 @@ All settings can also be passed as environment variables or CLI flags.
 
 - Python 3.14+
 - Docker
-- API keys for at least one provider (Anthropic, OpenAI, Google)
+- API keys for at least one provider (Anthropic, OpenAI, Google, or Browser Use)
+- Chrome or Chromium on the host if using `browser-use/*` models
+- `BROWSER_USE_API_KEY` if using `browser-use/*` models
 - `codex` CLI (for Codex solver/coordinator)
 - `claude` CLI (bundled with claude-agent-sdk)
 

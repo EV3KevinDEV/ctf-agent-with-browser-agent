@@ -1,11 +1,19 @@
 """Structured output types for solver agents."""
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
 class FlagFound(BaseModel):
     flag: str
     method: str  # brief description of how
+
+
+class StructuredFlagFound(BaseModel):
+    type: Literal["flag_found"] = "flag_found"
+    flag: str
+    method: str
 
 
 def solver_output_json_schema() -> dict:

@@ -15,6 +15,7 @@ dependencies = [
     "rich",
     "click",
     "markdownify",
+    "browser-use==0.12.6",
 ]
 
 [project.scripts]

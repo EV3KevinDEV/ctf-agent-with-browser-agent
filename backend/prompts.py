@@ -179,3 +179,91 @@ def build_prompt(
     ]
 
     return "\n".join(lines)
+
+
+def build_browser_use_prompt(
+    meta: ChallengeMeta,
+    distfile_names: list[str],
+    workspace_host_dir: str,
+    distfiles_host_dir: str,
+) -> str:
+    """Build a Browser Use specific task prompt.
+
+    Browser Use runs on the host, so localhost/127.0.0.1 must remain unchanged.
+    Sandbox-backed custom actions still operate on /challenge paths inside Docker.
+    """
+    conn_info = meta.connection_info.strip()
+
+    lines: list[str] = [
+        "You are an expert browser-driven CTF solver.",
+        "Use the browser for interactive web work and the custom sandbox actions for shell, files, and flag submission.",
+        "",
+    ]
+
+    if conn_info:
+        lines += [
+            "> **FIRST ACTION REQUIRED**: If the target is HTTP/HTTPS, open the target URL in the browser immediately.",
+            f"> Navigate to: `{conn_info}`",
+            "> Keep `localhost` and `127.0.0.1` exactly as written because the browser runs on the host.",
+            "",
+        ]
+
+    lines += [
+        "## Challenge",
+        f"**Name**    : {meta.name}",
+        f"**Category**: {meta.category or 'Unknown'}",
+        f"**Points**  : {meta.value or '?'}",
+    ]
+    if meta.tags:
+        lines.append(f"**Tags**    : {', '.join(meta.tags)}")
+    lines += ["", "## Description", meta.description or "_No description provided._", ""]
+
+    if conn_info:
+        lines += [
+            "## Service Connection",
+            "```",
+            conn_info,
+            "```",
+            (
+                "If this is a browser challenge, use browser actions like navigate, click, input, "
+                "extract, evaluate, upload_file, and done."
+            ),
+            "",
+        ]
+
+    if distfile_names:
+        lines.append("## Attached Files")
+        for name in distfile_names:
+            lines.append(f"- Sandbox path: `/challenge/distfiles/{name}`")
+        lines.append("")
+
+    visible_hints = [h for h in meta.hints if h.get("content")]
+    if visible_hints:
+        lines.append("## Hints")
+        for h in visible_hints:
+            lines.append(f"- {h['content']}")
+        lines.append("")
+
+    lines += [
+        "## Tooling",
+        "Browser actions: search, navigate, click, input, scroll, extract, evaluate, upload_file, screenshot, done.",
+        (
+            "Custom sandbox actions: bash, list_files, read_file, write_file, submit_flag, "
+            "webhook_create, webhook_get_requests, check_findings, notify_coordinator."
+        ),
+        "Sandbox paths: `/challenge/distfiles` is read-only, `/challenge/workspace` is writable.",
+        f"Browser upload host path for distfiles: `{distfiles_host_dir}`",
+        f"Browser download/generated host path: `{workspace_host_dir}`",
+        "Anything downloaded by the browser appears inside the sandbox at `/challenge/workspace`.",
+        "",
+        "## Instructions",
+        "1. If the challenge is web-based, open the target URL in the browser first.",
+        "2. Use browser-native actions for dynamic pages, auth flows, JS-heavy apps, and uploads.",
+        "3. Use sandbox actions for curl/bash/scripts, local file inspection, exploit code, and post-download analysis.",
+        "4. Use `check_findings` periodically to pick up sibling discoveries.",
+        "5. Use `submit_flag` to verify every real candidate before finishing.",
+        "6. Once the flag is confirmed, stop and return structured output with `type=flag_found`, the exact `flag`, and a brief `method`.",
+        "7. Do not rely on tools from other backends; stick to browser-native actions and the custom sandbox actions listed above.",
+    ]
+
+    return "\n".join(lines)

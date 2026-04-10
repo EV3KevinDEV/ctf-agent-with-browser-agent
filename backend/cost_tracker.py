@@ -19,6 +19,7 @@ PROVIDER_MAP: dict[str, str] = {
     "zen": "openai",
     "codex": "openai",
     "google": "google",
+    "browser-use": "browser-use",
 }
 
 # Fallback pricing for models not in genai-prices (per 1M tokens, USD)
@@ -169,6 +170,41 @@ class CostTracker:
             f"{agent_name}: {_fmt_tokens(usage.input_tokens)} in / "
             f"{_fmt_tokens(usage.cache_read_tokens)} cached ({_cache_rate(usage)} hit) / "
             f"{_fmt_tokens(usage.output_tokens)} out | ${cost:.4f} | {duration_seconds:.1f}s"
+        )
+
+    def record_precomputed(
+        self,
+        agent_name: str,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int = 0,
+        cost_usd: float = 0.0,
+        provider_spec: str = "",
+        duration_seconds: float = 0.0,
+    ) -> None:
+        """Record externally-computed usage and cost totals."""
+        usage = RunUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+        )
+
+        if agent_name not in self.by_agent:
+            self.by_agent[agent_name] = AgentUsage(
+                model_name=model_name,
+                provider_spec=provider_spec,
+            )
+
+        agent = self.by_agent[agent_name]
+        agent.usage += usage
+        agent.duration_seconds += duration_seconds
+        agent.cost_usd += cost_usd
+
+        logger.debug(
+            f"{agent_name}: {_fmt_tokens(usage.input_tokens)} in / "
+            f"{_fmt_tokens(usage.cache_read_tokens)} cached ({_cache_rate(usage)} hit) / "
+            f"{_fmt_tokens(usage.output_tokens)} out | ${cost_usd:.4f} | {duration_seconds:.1f}s"
         )
 
     @property

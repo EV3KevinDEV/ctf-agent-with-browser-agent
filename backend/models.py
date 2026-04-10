@@ -89,7 +89,7 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                 model_id,
                 provider=GoogleProvider(api_key=settings.gemini_api_key),
             )
-        case "claude-sdk" | "codex":
+        case "claude-sdk" | "codex" | "browser-use":
             raise ValueError(
                 f"Provider '{provider}' uses its own solver backend, not Pydantic AI. "
                 f"resolve_model() should not be called for {spec}."
