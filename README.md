@@ -14,45 +14,31 @@ The agent solves challenges across all categories — pwn, rev, crypto, forensic
 
 ## How It Works
 
-A **coordinator** LLM manages the competition while **solver swarms** attack individual challenges. Each swarm runs multiple models simultaneously — the first to find the flag wins.
+A **coordinator** LLM manages the competition while **solver swarms** attack individual challenges. Each swarm runs multiple models simultaneously - the first to find the flag wins.
 
-```
-                        +-----------------+
-                        |  CTFd Platform  |
-                        +--------+--------+
-                                 |
-                        +--------v--------+
-                        |  Poller (5s)    |
-                        +--------+--------+
-                                 |
-                        +--------v--------+
-                        | Coordinator LLM |
-                        | (Claude/Codex)  |
-                        +--------+--------+
-                                 |
-              +------------------+------------------+
-              |                  |                  |
-     +--------v--------+ +------v---------+ +------v---------+
-     | Swarm:          | | Swarm:         | | Swarm:         |
-     | challenge-1     | | challenge-2    | | challenge-N    |
-     |                 | |                | |                |
-     |  Opus (med)     | |  Opus (med)    | |                |
-     |  Opus (max)     | |  Opus (max)    | |     ...        |
-     |  GPT-5.4        | |  GPT-5.4       | |                |
-     |  GPT-5.4-mini   | |  GPT-5.4-mini  | |                |
-     |  GPT-5.3-codex  | |  GPT-5.3-codex | |                |
-     +--------+--------+ +--------+-------+ +----------------+
-              |                    |
-     +--------v--------+  +-------v--------+
-     | Docker Sandbox  |  | Docker Sandbox |
-     | (isolated)      |  | (isolated)     |
-     |                 |  |                |
-     | pwntools, r2,   |  | pwntools, r2,  |
-     | gdb, python...  |  | gdb, python... |
-     +-----------------+  +----------------+
+Challenge routing happens per challenge: `select_models_for_challenge()` starts from the default model lineup and can auto-add `browser-use/bu-latest` when the challenge looks browser-heavy and Browser Use prerequisites are available.
+
+```mermaid
+flowchart TD
+    A[CTFd Platform] --> B[Poller (5s)]
+    B --> C[Coordinator LLM<br/>(Claude / Codex)]
+    C --> D[Challenge metadata +<br/>model selection]
+    D --> E[Challenge swarm]
+
+    E --> F1[Claude SDK solvers<br/>claude-opus-4-6 medium/max]
+    E --> F2[Codex solvers<br/>gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex]
+    E --> F3[browser-use/bu-latest<br/>auto-enabled for web/browser-heavy challenges]
+
+    F1 --> G[Docker sandbox<br/>pwntools, r2, gdb, python...]
+    F2 --> G
+    F3 --> H[Host browser<br/>Chrome / Chromium]
+    F3 --> G
+
+    H --> I[Interactive web app]
+    G --> J[Shell, files, exploit scripts]
 ```
 
-Each solver runs in an isolated Docker container with CTF tools pre-installed. Solvers never give up — they keep trying different approaches until the flag is found.
+Each swarm uses an isolated Docker sandbox for CTF tools. Browser Use solvers additionally drive a host browser for interactive web work. Solvers never give up - they keep trying different approaches until the flag is found.
 
 ## Quick Start
 
@@ -112,7 +98,7 @@ This solver is **not** part of `DEFAULT_MODELS`. It runs Chrome/Chromium on the 
 
 ### Auto-Enable Browser Solver (Per Challenge)
 
-When running `ctf-solve`, the coordinator now auto-adds `browser-use/bu-latest` **per challenge** when it detects browser-heavy signals (for example web category or HTTP/HTTPS connection info), but only if Browser Use prerequisites are available:
+When running `ctf-solve`, challenge model selection auto-adds `browser-use/bu-latest` **per challenge** when it detects browser-heavy signals (for example web category or HTTP/HTTPS connection info), but only if Browser Use prerequisites are available:
 
 - `BROWSER_USE_API_KEY` is set
 - host Chrome/Chromium exists (or `BROWSER_USE_EXECUTABLE_PATH` is set)
