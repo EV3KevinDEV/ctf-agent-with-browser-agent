@@ -186,6 +186,7 @@ def build_browser_use_prompt(
     distfile_names: list[str],
     workspace_host_dir: str,
     distfiles_host_dir: str,
+    env_file_path: str | None = None,
 ) -> str:
     """Build a Browser Use specific task prompt.
 
@@ -207,6 +208,20 @@ def build_browser_use_prompt(
             "> Keep `localhost` and `127.0.0.1` exactly as written because the browser runs on the host.",
             "",
         ]
+
+    lines += ["## Secure Auth"]
+    if env_file_path:
+        lines.append(f"Repo env file: `{env_file_path}`")
+    lines += [
+        "If a page asks for the CTFd API token, call `input_ctfd_token` on the token field.",
+        "`input_ctfd_token` types the real value of `CTFD_TOKEN` loaded from `.env`.",
+        "If a page asks for the CTFd username, password, or site password, use the matching `input_ctfd_*` action.",
+        "These actions type the real values loaded from `.env` and solver settings.",
+    ]
+    lines += [
+        "Do not type placeholder labels, env var names, or literal `<secret>...</secret>` tags into the page.",
+        "",
+    ]
 
     lines += [
         "## Challenge",
@@ -251,10 +266,19 @@ def build_browser_use_prompt(
             "Custom sandbox actions: bash, list_files, read_file, write_file, submit_flag, "
             "webhook_create, webhook_get_requests, check_findings, notify_coordinator."
         ),
+        (
+            "Auth actions: input_ctfd_token, input_ctfd_username, input_ctfd_password, "
+            "input_ctfd_site_password."
+        ),
         "Sandbox paths: `/challenge/distfiles` is read-only, `/challenge/workspace` is writable.",
         f"Browser upload host path for distfiles: `{distfiles_host_dir}`",
         f"Browser download/generated host path: `{workspace_host_dir}`",
         "Anything downloaded by the browser appears inside the sandbox at `/challenge/workspace`.",
+        (
+            "Important: when you create a file for browser upload, write it with `bash` to "
+            "`/challenge/workspace/<name>` inside the sandbox, then call `upload_file` with either "
+            f"`/challenge/workspace/<name>` or the matching host path `{workspace_host_dir}/<name>`."
+        ),
         "",
         "## Instructions",
         "1. If the challenge is web-based, open the target URL in the browser first.",

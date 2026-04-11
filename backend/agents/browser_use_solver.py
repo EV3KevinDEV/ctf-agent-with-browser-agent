@@ -13,7 +13,7 @@ from typing import Any
 from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.message_bus import ChallengeMessageBus
-from backend.models import model_id_from_spec
+from backend.models import model_id_from_spec, solver_label
 from backend.output_types import StructuredFlagFound
 from backend.prompts import ChallengeMeta, build_browser_use_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
@@ -68,13 +68,15 @@ class BrowserUseSolver:
             challenge_dir=challenge_dir,
             memory_limit=getattr(settings, "container_memory_limit", "4g"),
         )
-        self.tracer = SolverTracer(meta.name, self.model_id)
-        self.agent_name = f"{meta.name}/{self.model_id}"
+        self.tracer = SolverTracer(meta.name, self.model_spec)
+        self.agent_name = solver_label(meta.name, self.model_spec)
 
         self._browser: Any | None = None
+        self._agent: Any | None = None
         self._tools: Any | None = None
         self._profile_dir: str | None = None
         self._distfiles_host_dir = str((Path(challenge_dir) / "distfiles").resolve())
+        self._env_file_path = self._resolve_env_file_path()
         self._available_file_paths: list[str] = []
         self._task_prompt = ""
         self._step_count = 0
@@ -83,6 +85,87 @@ class BrowserUseSolver:
         self._findings = ""
         self._cost_usd = 0.0
         self._bump_insights: str | None = None
+
+    def _refresh_available_file_paths(self) -> None:
+        current_paths = set()
+
+        workspace_root = Path(self.sandbox.workspace_dir)
+        if workspace_root.exists():
+            current_paths.add(str(workspace_root.resolve()))
+            for file_path in workspace_root.rglob("*"):
+                if file_path.is_file():
+                    current_paths.add(str(file_path.resolve()))
+
+        distfiles_root = Path(self._distfiles_host_dir)
+        if distfiles_root.exists():
+            current_paths.add(str(distfiles_root.resolve()))
+            for file_path in distfiles_root.rglob("*"):
+                if file_path.is_file():
+                    current_paths.add(str(file_path.resolve()))
+
+        if self._env_file_path:
+            env_path = Path(self._env_file_path)
+            if env_path.exists():
+                current_paths.add(str(env_path.resolve()))
+
+        updated_paths = sorted(current_paths)
+        if self._available_file_paths:
+            self._available_file_paths[:] = updated_paths
+        else:
+            self._available_file_paths = updated_paths
+
+        if self._agent is not None:
+            self._agent.available_file_paths = self._available_file_paths
+
+    def _resolve_browser_upload_path(self, path: str) -> str | None:
+        self._refresh_available_file_paths()
+
+        workspace_root = Path(self.sandbox.workspace_dir).resolve()
+        distfiles_root = Path(self._distfiles_host_dir).resolve()
+        candidates: list[Path] = []
+
+        raw_path = Path(path)
+        if raw_path.is_absolute():
+            candidates.append(raw_path)
+
+        workspace_prefix = "/challenge/workspace/"
+        distfiles_prefix = "/challenge/distfiles/"
+        if path.startswith(workspace_prefix):
+            candidates.append(workspace_root / path.removeprefix(workspace_prefix))
+        if path.startswith(distfiles_prefix):
+            candidates.append(distfiles_root / path.removeprefix(distfiles_prefix))
+
+        basename = Path(path).name
+        if basename:
+            candidates.append(workspace_root / basename)
+            candidates.append(distfiles_root / basename)
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except FileNotFoundError:
+                resolved = candidate.absolute()
+
+            resolved_str = str(resolved)
+            if resolved_str in seen:
+                continue
+            seen.add(resolved_str)
+
+            if not resolved.exists() or not resolved.is_file():
+                continue
+
+            if resolved.is_relative_to(workspace_root) or resolved.is_relative_to(distfiles_root):
+                return resolved_str
+
+        return None
+
+    @staticmethod
+    def _resolve_env_file_path() -> str | None:
+        env_file = Path(".env").resolve()
+        if env_file.exists():
+            return str(env_file)
+        return None
 
     async def start(self) -> None:
         api_key = getattr(self.settings, "browser_use_api_key", "")
@@ -96,9 +179,8 @@ class BrowserUseSolver:
 
         await self.sandbox.start()
         self._profile_dir = tempfile.mkdtemp(prefix="ctf-browser-use-profile-")
-        self._available_file_paths = [self.sandbox.workspace_dir]
-        if Path(self._distfiles_host_dir).exists():
-            self._available_file_paths.append(self._distfiles_host_dir)
+        self._available_file_paths = []
+        self._refresh_available_file_paths()
 
         distfile_names = list_distfiles(self.challenge_dir)
         self._task_prompt = build_browser_use_prompt(
@@ -106,6 +188,7 @@ class BrowserUseSolver:
             distfile_names,
             workspace_host_dir=self.sandbox.workspace_dir,
             distfiles_host_dir=self._distfiles_host_dir,
+            env_file_path=self._env_file_path,
         )
 
         from browser_use import Browser
@@ -119,7 +202,12 @@ class BrowserUseSolver:
             user_data_dir=self._profile_dir,
         )
 
-        self.tracer.event("start", challenge=self.meta.name, model=self.model_id)
+        self.tracer.event(
+            "start",
+            challenge=self.meta.name,
+            model=self.model_spec,
+            model_id=self.model_id,
+        )
         logger.info(f"[{self.agent_name}] Browser Use solver started")
 
     def _resolve_browser_executable(self) -> str:
@@ -143,12 +231,51 @@ class BrowserUseSolver:
 
     def _build_tools(self) -> Any:
         from browser_use import ActionResult, Tools
+        from browser_use.browser import BrowserSession
+        from browser_use.browser.events import TypeTextEvent, UploadFileEvent
 
         tools = Tools(exclude_actions=["read_file", "write_file", "replace_file"])
+        if "upload_file" in tools.registry.registry.actions:
+            del tools.registry.registry.actions["upload_file"]
+
+        async def _input_secret_value(
+            secret_name: str,
+            secret_value: str,
+            index: int,
+            browser_session: BrowserSession,
+            clear: bool = True,
+        ) -> ActionResult:
+            if not secret_value:
+                return ActionResult(error=f"{secret_name} is not configured in .env or solver settings.")
+
+            node = await browser_session.get_element_by_index(index)
+            if node is None:
+                msg = f"Element index {index} not available - page may have changed. Try refreshing browser state."
+                logger.warning(f"⚠️ {msg}")
+                return ActionResult(extracted_content=msg)
+
+            event = browser_session.event_bus.dispatch(
+                TypeTextEvent(
+                    node=node,
+                    text=secret_value,
+                    clear=clear,
+                    is_sensitive=True,
+                    sensitive_key_name=secret_name,
+                )
+            )
+            await event
+            input_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
+            msg = f"Typed {secret_name}"
+            return ActionResult(
+                extracted_content=msg,
+                long_term_memory=msg,
+                metadata=input_metadata if isinstance(input_metadata, dict) else None,
+            )
 
         @tools.action(description="Execute a bash command in the Docker sandbox.")
         async def bash(command: str, timeout_seconds: int = 60) -> ActionResult:
             result = await do_bash(self.sandbox, command, timeout_seconds)
+            self._refresh_available_file_paths()
             return ActionResult(extracted_content=result)
 
         @tools.action(description="List files inside the Docker sandbox.")
@@ -164,6 +291,7 @@ class BrowserUseSolver:
         @tools.action(description="Write a file into the Docker sandbox.")
         async def write_file(path: str, content: str) -> ActionResult:
             result = await do_write_file(self.sandbox, path, content)
+            self._refresh_available_file_paths()
             return ActionResult(extracted_content=result)
 
         @tools.action(description="Submit a candidate flag to CTFd for verification.")
@@ -206,6 +334,68 @@ class BrowserUseSolver:
             result = await do_check_findings(self.message_bus, self.model_spec)
             return ActionResult(extracted_content=result)
 
+        @tools.action(
+            description=(
+                "Upload a file to an input element by index. Accepts `/challenge/workspace/...`, "
+                "`/challenge/distfiles/...`, or the matching host path."
+            )
+        )
+        async def upload_file(index: int, path: str, browser_session) -> ActionResult:
+            resolved_path = self._resolve_browser_upload_path(path)
+            if not resolved_path:
+                return ActionResult(
+                    error=(
+                        f"File path {path} is not available for upload. "
+                        "Use a file under `/challenge/workspace` or `/challenge/distfiles`."
+                    )
+                )
+
+            node = await browser_session.get_element_by_index(index)
+            if node is None:
+                msg = f"Element index {index} not available - page may have changed. Try refreshing browser state."
+                logger.warning(f"⚠️ {msg}")
+                return ActionResult(extracted_content=msg)
+
+            event = browser_session.event_bus.dispatch(
+                UploadFileEvent(
+                    node=node,
+                    file_path=resolved_path,
+                )
+            )
+            await event
+            await event.event_result(raise_if_any=True, raise_if_none=False)
+            msg = f"Uploaded file {resolved_path}"
+            return ActionResult(
+                extracted_content=msg,
+                long_term_memory=msg,
+            )
+
+        @tools.action(description="Type the configured CTFd API token into an element by index.")
+        async def input_ctfd_token(index: int, browser_session, clear: bool = True) -> ActionResult:
+            return await _input_secret_value("ctfd_token", self.ctfd.token, index, browser_session, clear)
+
+        @tools.action(description="Type the configured CTFd username into an element by index.")
+        async def input_ctfd_username(index: int, browser_session, clear: bool = True) -> ActionResult:
+            return await _input_secret_value("ctfd_username", self.ctfd.username, index, browser_session, clear)
+
+        @tools.action(description="Type the configured CTFd password into an element by index.")
+        async def input_ctfd_password(index: int, browser_session, clear: bool = True) -> ActionResult:
+            return await _input_secret_value("ctfd_password", self.ctfd.password, index, browser_session, clear)
+
+        @tools.action(description="Type the configured CTFd site password into an element by index.")
+        async def input_ctfd_site_password(
+            index: int,
+            browser_session,
+            clear: bool = True,
+        ) -> ActionResult:
+            return await _input_secret_value(
+                "ctfd_site_password",
+                self.ctfd.site_password,
+                index,
+                browser_session,
+                clear,
+            )
+
         @tools.action(description="Send a strategic message to the coordinator.")
         async def notify_coordinator(message: str) -> ActionResult:
             if self.notify_coordinator:
@@ -216,6 +406,17 @@ class BrowserUseSolver:
         return tools
 
     def _build_run_prompt(self) -> str:
+        secure_input_hint = ""
+        if self.ctfd.token or self.ctfd.username or self.ctfd.password or self.ctfd.site_password:
+            env_source = "the repo `.env` file"
+            if self._env_file_path:
+                env_source = f"`{self._env_file_path}`"
+            secure_input_hint = (
+                "\n8. If a page asks for CTFd auth, use the dedicated `input_ctfd_*` actions "
+                f"backed by values from {env_source}. `input_ctfd_token` uses `CTFD_TOKEN`. "
+                "Do not type placeholder names or env var names into the page."
+            )
+
         if self._bump_insights:
             prompt = (
                 f"{self._task_prompt}\n\n"
@@ -225,15 +426,16 @@ class BrowserUseSolver:
                 "Try a different technical approach and avoid repeating failed ideas."
             )
             self._bump_insights = None
-            return prompt
+            return prompt + secure_input_hint
 
         if self._step_count == 0:
-            return self._task_prompt
+            return self._task_prompt + secure_input_hint
 
         return (
             f"{self._task_prompt}\n\n"
             "Continue from the current browser state and sandbox workspace. "
             "Try a different approach than before."
+            f"{secure_input_hint}"
         )
 
     async def _on_new_step(self, browser_state_summary: Any, agent_output: Any, step: int) -> None:
@@ -267,7 +469,7 @@ class BrowserUseSolver:
     def _make_agent(self, task: str) -> Any:
         from browser_use import Agent, ChatBrowserUse
 
-        return Agent(
+        agent = Agent(
             task=task,
             llm=ChatBrowserUse(
                 model=self.model_id,
@@ -283,6 +485,8 @@ class BrowserUseSolver:
             display_files_in_done_text=False,
             enable_signal_handler=False,
         )
+        self._agent = agent
+        return agent
 
     def _apply_usage_summary(self, history: Any, duration_seconds: float) -> None:
         usage = getattr(history, "usage", None)
@@ -353,7 +557,7 @@ class BrowserUseSolver:
         t0 = time.monotonic()
         try:
             agent = self._make_agent(self._build_run_prompt())
-            history = await agent.run(max_steps=100)
+            history = await agent.run(max_steps=300)
             self.tracer.event(
                 "turn_complete",
                 duration=round(time.monotonic() - t0, 1),
@@ -401,6 +605,7 @@ class BrowserUseSolver:
                 except Exception:
                     pass
             self._browser = None
+        self._agent = None
         if self._profile_dir:
             shutil.rmtree(self._profile_dir, ignore_errors=True)
             self._profile_dir = None
